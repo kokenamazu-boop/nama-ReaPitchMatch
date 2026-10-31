@@ -1,5 +1,7 @@
 # nama-ReaPitchMatch
 
+[![tests](https://github.com/kokenamazu-boop/nama-ReaPitchMatch/actions/workflows/tests.yml/badge.svg)](https://github.com/kokenamazu-boop/nama-ReaPitchMatch/actions/workflows/tests.yml)
+
 REAPERで、**ファイル名に書かれた音名**を読み取り、選択した音声アイテムを**指定した音程**へ移調するReaScriptです。人力ボーカル素材の音程合わせを、1回の実行でまとめて行うことを目的にしています。
 
 - 例：`り_D4_30.wav` を `E4` へ移調
