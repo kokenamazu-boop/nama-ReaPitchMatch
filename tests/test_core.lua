@@ -213,6 +213,18 @@ test("intersect_time_selection", function()
   eq(M.intersect_time_selection(10, 2, 12, 13), nil)
 end)
 
+test("analysis_source_range: time selection mapping", function()
+  local start, span = M.analysis_source_range(10, 1, 0, 10, false, 10.5, 11.5)
+  near(start, 0.5); near(span, 1.0)
+  start, span = M.analysis_source_range(10, 2, 0, 10, false, 10.5, 11.5)
+  near(start, 1.0); near(span, 2.0)
+  start, span = M.analysis_source_range(10, 1, 0, 1, true, 10, 11.5)
+  near(start, 0.0); near(span, 1.0)
+  start, span = M.analysis_source_range(10, 1, 0, 10, false, 10, 12)
+  near(start, 0.0); near(span, 2.0)
+  eq(M.analysis_source_range(10, 0, 0, 10, false, 10, 12), nil)
+end)
+
 test("choose_estimate: competing plateau is rejected", function()
   local observations = {}
   for index = 1, 10 do observations[index] = observation(index * 0.01, 10, 0.5) end

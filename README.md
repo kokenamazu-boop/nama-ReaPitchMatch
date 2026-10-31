@@ -180,7 +180,7 @@ lua tests/test_reaper_logic.lua
 python3 tests/check_index.py
 ```
 
-Luaのテストは合計37件です。`check_index.py` は `index.xml` のバージョン・作者・説明・ダウンロードURLがLuaのメタデータと一致するか確認します。GitHub Actionsでも、push時に構文チェックとテストを実行します。
+Luaのテストは合計38件です。`check_index.py` は `index.xml` のバージョン・作者・説明・ダウンロードURLがLuaのメタデータと一致するか確認します。GitHub Actionsでも、push時に構文チェックとテストを実行します。
 
 ## ピッチ検出ベンチマーク（開発者向け）
 

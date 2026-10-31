@@ -230,6 +230,15 @@ local function intersect_time_selection(item_position, item_length,
   return play_start, play_end, true
 end
 
+-- アイテム内の再生範囲（時間選択で限定された範囲）を、元ソースの範囲へ変換します。
+local function analysis_source_range(item_position, rate, offset, source_length,
+                                     loop, play_start, play_end)
+  if rate <= 0 or source_length <= 0 or play_end <= play_start then return nil, 0 end
+  local duration = (play_end - play_start) * rate
+  local source_offset = offset + (play_start - item_position) * rate
+  return source_range(source_length, source_offset, duration, loop)
+end
+
 -- Native-rate source peaks return individual PCM samples. Reading the source
 -- avoids take pitch, time-stretching, volume and FX affecting the estimate.
 local function median(values)
@@ -450,10 +459,8 @@ local function analyze_source(entry, progress)
   if rate <= 0 or source_length <= 0 or play_end <= play_start then
     return nil, "解析範囲がないため補正なし"
   end
-  local duration = (play_end - play_start) * rate
-  local source_offset = offset + (play_start - item_position) * rate
-  local start, span = source_range(source_length, source_offset, duration,
-    reaper.GetMediaItemInfo_Value(item, "B_LOOPSRC") ~= 0)
+  local start, span = analysis_source_range(item_position, rate, offset, source_length,
+    reaper.GetMediaItemInfo_Value(item, "B_LOOPSRC") ~= 0, play_start, play_end)
   if not start then return nil, "解析範囲がないため補正なし" end
   -- At least 4.5 expected periods, with a small absolute floor. For D4 this
   -- permits roughly 16 ms instead of rejecting everything below 80 ms.
@@ -1081,6 +1088,7 @@ if _G.NAMA_PITCHMATCH_TEST then
     source_filename = source_filename,
     source_range = source_range,
     intersect_time_selection = intersect_time_selection,
+    analysis_source_range = analysis_source_range,
   }
   return
 end
