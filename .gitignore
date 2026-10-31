@@ -1,0 +1,38 @@
+# REAPER projects and backups
+*.RPP
+*.rpp
+*.RPP-bak
+*.rpp-bak
+
+# Audio samples used for local testing
+*.wav
+*.wave
+*.aif
+*.aiff
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.m4a
+*.aac
+*.wv
+*.ape
+*.caf
+*.w64
+*.bwf
+*.wem
+*.wma
+*.mp2
+
+# Build artifacts
+*.zip
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+__pycache__/
+*.pyc

@@ -1,0 +1,47 @@
+name: ReaPack index
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - index.xml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install ReaPack indexer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+          gem install reapack-index
+
+      - name: Validate package metadata
+        run: reapack-index --check
+
+      - name: Build index
+        run: reapack-index --rebuild --no-commit --name "nama-ReaPitchMatch" .
+
+      - name: Commit updated index
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain index.xml)" ]; then
+            git add index.xml
+            git commit -m "Update ReaPack index"
+            git push
+          fi

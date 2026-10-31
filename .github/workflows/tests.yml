@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Syntax check
+        run: luac5.4 -p Jinriki_FilenamePitch_to_Target_Soloist.lua
+
+      - name: Run pure-function tests
+        run: lua5.4 tests/test_core.lua
+
+      - name: Run REAPER API mock tests
+        run: lua5.4 tests/test_reaper_logic.lua
