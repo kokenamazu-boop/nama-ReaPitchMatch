@@ -47,6 +47,7 @@ python tools\pitch_benchmark.py ^
 | `--stability-min-frames` | `8` | 安定判定に必要な40msフレーム数 |
 | `--ref-offset` | `100` | FCPE中央値との差がこれを超えたら `reference-mismatch` |
 | `--csv` | `pitch-benchmark.csv` | 全ケースのCSV出力先 |
+| `--skip-hash-check` | off | JSONの `source.sha256` とWAVの照合を省略 |
 | `--verbose` | off | 25セント超の誤差、未検出、グライド区間の誤補正を表示 |
 | `--self-test` | off | 合成220 Hz音でベンチマーク経路を自己テスト |
 
@@ -58,7 +59,7 @@ python tools\pitch_benchmark.py --self-test --lua "C:\path\to\lua.exe"
 
 ## 判定方法
 
-1. JSONの `units` から、FCPEの `pitch.hz` がある区間だけを使います。
+1. JSONの `units` から、FCPEの `pitch.hz` がある区間だけを使います。JSONに `source.sha256` がある場合はWAVと照合し、不一致ならスキップします（`--skip-hash-check` で省略可）。
 2. 母音区間は、`phoneme_starts` の最後（末尾の音素が母音のとき）から `unit.end` までとします。無い場合は `start + 0.35 * 長さ` にフォールバックします。
 3. 区間をReaScriptと同じように間引き、`tools/bench_pitch.lua` で `frame_pitch()` と `choose_estimate()` を実行します。
 4. 別の自己相関（40ms窓・10msホップ）で区間の安定度を分類します。

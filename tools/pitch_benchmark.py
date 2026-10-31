@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import statistics
@@ -181,7 +182,7 @@ def cents(estimated: float, reference: float) -> float:
 
 def load_cases(json_dir: Path, wav_dir: Path, pattern: str, region: str,
                pad_ms: float, expected_mode: str, min_strength: float,
-               max_cases: int | None):
+               max_cases: int | None, verify_hash: bool = True):
     cases = []
     for json_path in sorted(json_dir.glob(pattern)):
         try:
@@ -198,6 +199,13 @@ def load_cases(json_dir: Path, wav_dir: Path, pattern: str, region: str,
         if not source_path.is_file():
             print(f"skip {json_path.name}: WAVが見つかりません ({source_path})", file=sys.stderr)
             continue
+        expected_hash = source.get("sha256")
+        if verify_hash and expected_hash:
+            actual_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            if actual_hash.lower() != expected_hash.lower():
+                print(f"skip {json_path.name}: WAVのSHA-256がJSONと一致しません",
+                      file=sys.stderr)
+                continue
 
         for unit in document.get("units") or []:
             pitch = unit.get("pitch") or {}
@@ -525,6 +533,8 @@ def main() -> int:
                         help="nearest=ファイル名の音名を想定、exact=FCPEの周波数を直接使用")
     parser.add_argument("--min-strength", type=float, default=0.0)
     parser.add_argument("--max-cases", type=int, default=None)
+    parser.add_argument("--skip-hash-check", action="store_true",
+                        help="JSONのsource.sha256とWAVの照合を省略する")
     parser.add_argument("--stability-mad", type=float, default=25.0,
                         help="安定判定に使うMAD上限（cent）")
     parser.add_argument("--stability-span", type=float, default=100.0,
@@ -550,7 +560,8 @@ def main() -> int:
         print(f"JSONフォルダーがありません: {args.json_dir}", file=sys.stderr)
         return 2
     cases = load_cases(args.json_dir, args.wav_dir, args.pattern, args.region,
-                       args.pad_ms, args.expected, args.min_strength, args.max_cases)
+                       args.pad_ms, args.expected, args.min_strength, args.max_cases,
+                       not args.skip_hash_check)
     if not cases:
         print("比較できる区間がありません。", file=sys.stderr)
         return 2
