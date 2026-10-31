@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" commit="b059f645d0328bbca1eefcdb6bacc700f47e3bc0" name="nama-ReaPitchMatch">
+<index version="1" commit="c86d0b10540104d811b49fb15c00d306d9dd340e" name="nama-ReaPitchMatch">
   <category name="Pitch">
     <reapack name="Jinriki_FilenamePitch_to_Target_Soloist.lua" type="script" desc="人力：ファイル名から目標音へ移調（Soloist）">
       <metadata>
         <link rel="website">https://github.com/kokenamazu-boop/nama-ReaPitchMatch</link>
       </metadata>
-      <version name="1.8.0" author="Koke" time="2026-10-31T09:55:37Z">
-        <source main="main">https://github.com/kokenamazu-boop/nama-ReaPitchMatch/raw/b059f645d0328bbca1eefcdb6bacc700f47e3bc0/Jinriki_FilenamePitch_to_Target_Soloist.lua</source>
+      <version name="1.8.0" author="Koke" time="2026-10-31T09:57:47Z">
+        <source main="main">https://github.com/kokenamazu-boop/nama-ReaPitchMatch/raw/c86d0b10540104d811b49fb15c00d306d9dd340e/Jinriki_FilenamePitch_to_Target_Soloist.lua</source>
       </version>
     </reapack>
   </category>
