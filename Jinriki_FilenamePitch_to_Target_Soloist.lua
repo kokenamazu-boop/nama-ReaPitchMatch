@@ -1,8 +1,9 @@
 -- @description 人力：ファイル名から目標音へ移調（Soloist）
--- @version 1.7.0
+-- @version 1.8.0
 -- @author Koke
 -- @link https://github.com/kokenamazu-boop/nama-ReaPitchMatch
 -- @changelog
+--   1.8.0 時間選択がある場合は、その範囲だけを解析。解析結果に検出フレーム数と確信度を表示。
 --   1.7.0 テイク名フォールバック、全角表記・音名後の♯/♭対応、解析の進捗表示とキャンセル、
 --         ファイル名の拡張子判定を改善。ReaPack配布とテストを追加。
 --   1.6 元音声のセント補正、Soloistサブモード維持、失敗時のロールバックを追加。
@@ -10,6 +11,8 @@
 --   素材名 り_D4_30.wav などから音名を読み、入力した音へ移調します。
 --   MIDIエディタの選択ノートから、目標音を自動入力できます。
 --   チェック時のみ元音声を解析してセント補正。チェック状態を保存します。
+--   時間選択がある場合は、その範囲だけを解析します。
+--   解析結果には検出フレーム数と確信度を表示します。
 --   ファイル名に音名がない場合は、テイク名から読み取ります。
 --   選択アイテムのアクティブテイクのみ対象。外部拡張は不要です。
 --   元の音声ファイルを書き換えず、テイクの設定を変更します。
@@ -198,6 +201,35 @@ local function source_filename(take)
   return ""
 end
 
+-- アイテム内の再生範囲を、元ソース上の[start, span]へ変換します。
+-- ループ素材は既存どおり、選択区内で長い方のループ区間を使います。
+local function source_range(source_length, offset, duration, loop)
+  if source_length <= 0 or duration <= 0 then return nil, 0 end
+  if loop then
+    offset = offset % source_length
+    local first = math.min(duration, source_length - offset)
+    local second = math.min(math.max(0, duration - first), source_length)
+    if second > first then return 0, second end
+    return offset, first
+  end
+  local start = math.max(0, offset)
+  return start, math.max(0, math.min(source_length, offset + duration) - start)
+end
+
+-- タイムラインの時間選択とアイテムの再生範囲を交差させます。
+-- 時間選択がない場合は、アイテム全体と limited=false を返します。
+local function intersect_time_selection(item_position, item_length,
+                                        selection_start, selection_end)
+  local item_end = item_position + item_length
+  if not selection_start or not selection_end or selection_end <= selection_start then
+    return item_position, item_end, false
+  end
+  local play_start = math.max(item_position, selection_start)
+  local play_end = math.min(item_end, selection_end)
+  if play_end <= play_start then return nil end
+  return play_start, play_end, true
+end
+
 -- Native-rate source peaks return individual PCM samples. Reading the source
 -- avoids take pitch, time-stretching, volume and FX affecting the estimate.
 local function median(values)
@@ -275,12 +307,22 @@ local function choose_estimate(observations, span, expected, hop)
     if math.abs(candidate.cents) <= 50 then loudest = math.max(loudest, candidate.rms) end
   end
   local voiced, values = {}, {}
+  local confidence_sum = 0
   for _, candidate in ipairs(observations) do
     if math.abs(candidate.cents) <= 50 and candidate.rms >= loudest * 0.15 then
       voiced[#voiced + 1] = candidate
       values[#values + 1] = candidate.cents
+      confidence_sum = confidence_sum + candidate.confidence
     end
   end
+  -- 画面表示用の品質。frames は「音程が取れたフレーム数」で、
+  -- 解析した全フレーム数ではありません。
+  local quality = {
+    frames = #observations,
+    voiced = #voiced,
+    voiced_ratio = #observations > 0 and #voiced / #observations or 0,
+    confidence = #voiced > 0 and confidence_sum / #voiced or 0,
+  }
 
   -- Keep out-of-range estimates too: their count alone cannot distinguish
   -- a transient/harmonic detection from a genuinely sustained second pitch.
@@ -336,8 +378,9 @@ local function choose_estimate(observations, span, expected, hop)
     if median(deviations) <= 8 and #inliers >= math.max(3, math.ceil(#values * 0.75)) and longest >= 3 then
       local cents = median(inliers)
       local conflict = competing_pitch(cents)
-      if conflict then return nil, nil, conflict, true end
-      return cents, #inliers < #observations and "一時的な推定の外れを除外／" or ""
+      if conflict then return nil, nil, conflict, true, quality end
+      return cents, #inliers < #observations and "一時的な推定の外れを除外／" or "",
+        nil, false, quality
     end
   end
 
@@ -350,8 +393,8 @@ local function choose_estimate(observations, span, expected, hop)
       and math.abs(first.time - second.time) >= 0.5 / expected then
       local cents = (first.cents + second.cents) / 2
       local conflict = competing_pitch(cents)
-      if conflict then return nil, nil, conflict, true end
-      return cents, "短い有声区間を使用／"
+      if conflict then return nil, nil, conflict, true, quality end
+      return cents, "短い有声区間を使用／", nil, false, quality
     end
   end
 
@@ -365,15 +408,17 @@ local function choose_estimate(observations, span, expected, hop)
   end
   if best then
     local conflict = competing_pitch(best.cents)
-    if conflict then return nil, nil, conflict, true end
-    return best.cents, string.format("安定した母音区間を使用（約%.0f ms）／", best.width * 1000)
+    if conflict then return nil, nil, conflict, true, quality end
+    return best.cents, string.format("安定した母音区間を使用（約%.0f ms）／", best.width * 1000),
+      nil, false, quality
   end
   if #voiced < 3 then
-    return nil, nil, #observations > #voiced
+    local reason = #observations > #voiced
       and string.format("音名から±50 cent以内の安定区間が不足したため補正なし（範囲内 %d/%d 区間）", #voiced, #observations)
       or "安定した有声音を検出できないため補正なし"
+    return nil, nil, reason, false, quality
   end
-  return nil, nil, "音程の揺れが大きく安定区間を選べないため補正なし"
+  return nil, nil, "音程の揺れが大きく安定区間を選べないため補正なし", false, quality
 end
 
 local function analyze_source(entry, progress)
@@ -398,18 +443,18 @@ local function analyze_source(entry, progress)
   end
   local rate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
   local offset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
-  local duration = reaper.GetMediaItemInfo_Value(item, "D_LENGTH") * rate
-  if rate <= 0 or source_length <= 0 then return nil, "解析範囲がないため補正なし" end
-  local start, span
-  if reaper.GetMediaItemInfo_Value(item, "B_LOOPSRC") ~= 0 then
-    offset = offset % source_length
-    local first = math.min(duration, source_length - offset)
-    local second = math.min(math.max(0, duration - first), source_length)
-    if second > first then start, span = 0, second else start, span = offset, first end
-  else
-    start = math.max(0, offset)
-    span = math.max(0, math.min(source_length, offset + duration) - start)
+  local item_position = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+  local item_length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+  local play_start = entry.analysis_play_start or item_position
+  local play_end = entry.analysis_play_end or (item_position + item_length)
+  if rate <= 0 or source_length <= 0 or play_end <= play_start then
+    return nil, "解析範囲がないため補正なし"
   end
+  local duration = (play_end - play_start) * rate
+  local source_offset = offset + (play_start - item_position) * rate
+  local start, span = source_range(source_length, source_offset, duration,
+    reaper.GetMediaItemInfo_Value(item, "B_LOOPSRC") ~= 0)
+  if not start then return nil, "解析範囲がないため補正なし" end
   -- At least 4.5 expected periods, with a small absolute floor. For D4 this
   -- permits roughly 16 ms instead of rejecting everything below 80 ms.
   local minimum_span = math.max(0.012, 4.5 / expected)
@@ -476,26 +521,38 @@ local function analyze_source(entry, progress)
   end
   return observations, (last_start - first_sample) / sample_rate / (frames - 1)
   end
+  local function quality_text(quality)
+    if not quality or quality.frames == 0 then return "" end
+    return string.format("検出 %d/%d・確信度 %.2f",
+      quality.voiced, quality.frames, quality.confidence)
+  end
   local failure
   for pass, window in ipairs({math.max(0.018, 6 / expected), math.max(0.010, 4 / expected)}) do
     local observations, hop, problem = read_pass(math.min(window, span * 0.85), pass == 1 and 96 or 128)
     if not observations then return nil, problem end
-    local cents, description, reason, conflict = choose_estimate(observations, span, expected, hop)
+    local cents, description, reason, conflict, quality =
+      choose_estimate(observations, span, expected, hop)
     if cents then
       local rounded = math.floor(math.abs(cents) * 10 + 0.5) / 10
       if cents < 0 then rounded = -rounded end
-      return -rounded / 100, description .. string.format("実音のずれ %+0.1f cent／補正 %+0.1f cent", rounded, -rounded)
+      local text = description .. string.format(
+        "実音のずれ %+0.1f cent／補正 %+0.1f cent", rounded, -rounded)
+      local quality_note = quality_text(quality)
+      if quality_note ~= "" then text = text .. "／" .. quality_note end
+      return -rounded / 100, text
     end
+    local quality_note = quality_text(quality)
+    if quality_note ~= "" then reason = reason .. "／" .. quality_note end
     if conflict then return nil, reason end
     failure = reason
   end
   return nil, failure
 end
 
-local function show_pitch_dialog(default, title, on_submit)
+local function show_pitch_dialog(default, title, on_submit, initial_status)
   local text, caret, selected_all = default, #default, true
   local checked = reaper.GetExtState(STATE_SECTION, "analyze_audio") == "1"
-  local focus, status, worker, closed, previous_mouse = 0, "", nil, false, false
+  local focus, status, worker, closed, previous_mouse = 0, initial_status or "", nil, false, false
   local progress_fraction = 0
   local reply = table.pack()
   local function close()
@@ -746,6 +803,10 @@ local function apply_entries(project, entries, skipped, soloist, target_note, ta
     local name_note = entry.name_source == "テイク名" and "（テイク名）" or ""
     details[#details + 1] = string.format("%s%s：%s → %s（%+.3f 半音）",
       entry.filename, name_note, entry.source_label, target_label, pitch)
+    if entry.analysis_limited and entry.analysis_play_start then
+      details[#details + 1] = string.format("  解析範囲：%.3f〜%.3f 秒",
+        entry.analysis_play_start, entry.analysis_play_end)
+    end
     if entry.analysis_status then details[#details + 1] = "  " .. entry.analysis_status end
   end
 
@@ -808,6 +869,13 @@ local function apply_entries(project, entries, skipped, soloist, target_note, ta
   end
 end
 
+local function read_time_selection(project)
+  if reaper.APIExists("GetSet_LoopTimeRange2") then
+    return reaper.GetSet_LoopTimeRange2(project, false, false, 0, 0, false)
+  end
+  return reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+end
+
 local function main()
   -- 変更しない場合の自動Undoを抑制。変更時は自前で1回にまとめます。
   reaper.defer(function() end)
@@ -817,13 +885,18 @@ local function main()
     reaper.ShowMessageBox("トラック上の音声アイテムを選択してから実行してください。", TITLE, 0)
     return
   end
+  local selection_start, selection_end = read_time_selection(project)
+  local has_time_selection = selection_end > selection_start
 
   local entries, skipped = {}, {}
   for index = 0, count - 1 do
     local item = reaper.GetSelectedMediaItem(project, index)
     local take = reaper.GetActiveTake(item)
     local take_name = take and trim(reaper.GetTakeName(take) or "") or ""
+    local item_position = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local item_length = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
     local reason, filename, source_note, source_label, name_source, parse_code
+    local analysis_play_start, analysis_play_end, analysis_limited
     if reaper.GetMediaItemInfo_Value(item, "C_LOCK") % 2 == 1 then
       reason = "ロックされています"
     elseif not take then
@@ -849,6 +922,13 @@ local function main()
           reason = reason .. "／" .. take_reason
         end
       end
+      if not reason then
+        analysis_play_start, analysis_play_end, analysis_limited =
+          intersect_time_selection(item_position, item_length, selection_start, selection_end)
+        if not analysis_play_start then
+          reason = has_time_selection and "時間選択の範囲外です" or "アイテムの長さがありません"
+        end
+      end
     end
     if reason then
       local label = filename and filename ~= "" and basename(filename)
@@ -860,14 +940,21 @@ local function main()
         filename = filename ~= "" and basename(filename) or "(ファイル名なし)",
         name_source = name_source or "ファイル名",
         source_note = source_note, source_label = source_label,
+        analysis_play_start = analysis_play_start,
+        analysis_play_end = analysis_play_end,
+        analysis_limited = analysis_limited,
         source = reaper.GetMediaItemTake_Source(take),
         old = read_settings(take)
       }
     end
   end
   if #entries == 0 then
-    reaper.ShowMessageBox("処理できる音声アイテムがありません。\n\n" .. report_rows(skipped)
-      .. "\n\nファイル名の例：り_D4_30.wav / E3_あ.wav / あ_F#3.wav", TITLE, 0)
+    local message = "処理できる音声アイテムがありません。\n\n" .. report_rows(skipped)
+      .. "\n\nファイル名の例：り_D4_30.wav / E3_あ.wav / あ_F#3.wav"
+    if has_time_selection then
+      message = message .. "\n時間選択の範囲に音声アイテムがあるか確認してください。"
+    end
+    reaper.ShowMessageBox(message, TITLE, 0)
     return
   end
 
@@ -892,6 +979,12 @@ local function main()
   end
   local input_title = string.format("%s（対象 %d 件）", TITLE, #entries)
   if midi_status then input_title = input_title .. " / " .. midi_status end
+  local initial_status = ""
+  if has_time_selection then
+    input_title = input_title .. " / 時間選択"
+    initial_status = string.format("時間選択 %.3f〜%.3f 秒の範囲を解析します。",
+      selection_start, selection_end)
+  end
   local function validate_entries()
     if reaper.EnumProjects(-1, "") ~= project then
       error("プロジェクトが切り替わりました。対象を確認して再実行してください。", 0)
@@ -946,7 +1039,7 @@ local function main()
       end
       apply_entries(project, entries, skipped, soloist, target_note, target_label, analyze)
     end
-  end)
+  end, initial_status)
 end
 
 -- テストから純粋関数を直接呼ぶための入口です。通常のREAPER実行では
@@ -976,6 +1069,8 @@ if _G.NAMA_PITCHMATCH_TEST then
     pitch_mode_names = pitch_mode_names,
     selected_midi_target = selected_midi_target,
     source_filename = source_filename,
+    source_range = source_range,
+    intersect_time_selection = intersect_time_selection,
   }
   return
 end
