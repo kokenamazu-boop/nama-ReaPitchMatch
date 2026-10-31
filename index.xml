@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" commit="69f384e610a9dd82b41d2927232d551261a0f634" name="nama-ReaPitchMatch">
+<index version="1" commit="1fef35af82ab3b7a40b5bc715d5ab595ffc04cb7" name="nama-ReaPitchMatch">
   <category name="Pitch">
     <reapack name="nama-ReaPitchMatch.lua" type="script" desc="nama-ReaPitchMatch：ファイル名から目標音へ移調（Soloist）">
       <metadata>
         <link rel="website">https://github.com/kokenamazu-boop/nama-ReaPitchMatch</link>
       </metadata>
       <version name="1.9.0" author="Koke" time="2026-10-31T10:18:18Z">
-        <source main="main">https://github.com/kokenamazu-boop/nama-ReaPitchMatch/raw/69f384e610a9dd82b41d2927232d551261a0f634/nama-ReaPitchMatch.lua</source>
+        <source main="main">https://github.com/kokenamazu-boop/nama-ReaPitchMatch/raw/1fef35af82ab3b7a40b5bc715d5ab595ffc04cb7/nama-ReaPitchMatch.lua</source>
       </version>
     </reapack>
   </category>
