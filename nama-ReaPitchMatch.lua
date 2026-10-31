@@ -1,8 +1,10 @@
--- @description 人力：ファイル名から目標音へ移調（Soloist）
--- @version 1.8.0
+-- @description nama-ReaPitchMatch：ファイル名から目標音へ移調（Soloist）
+-- @version 1.9.0
 -- @author Koke
 -- @link https://github.com/kokenamazu-boop/nama-ReaPitchMatch
 -- @changelog
+--   1.9.0 スクリプト名をnama-ReaPitchMatch.luaへ変更。既存ピッチ設定の警告、自動安定性ゲート、
+--         短いアイテムの窓拡張、解析チャンネル設定、確信度しきい値、スクロール式レポートを追加。
 --   1.8.0 時間選択がある場合は、その範囲だけを解析。解析結果に検出フレーム数と確信度を表示。
 --   1.7.0 テイク名フォールバック、全角表記・音名後の♯/♭対応、解析の進捗表示とキャンセル、
 --         ファイル名の拡張子判定を改善。ReaPack配布とテストを追加。
@@ -13,6 +15,10 @@
 --   チェック時のみ元音声を解析してセント補正。チェック状態を保存します。
 --   時間選択がある場合は、その範囲だけを解析します。
 --   解析結果には検出フレーム数と確信度を表示します。
+--   既存ピッチ・再生レート・Pitch Envelope・ピッチFXがある場合は警告します。
+--   区間全体がグライドしている場合は、自動で補正を止めます。
+--   短いアイテムは解析窓を最大60ms手前へ広げます。
+--   長い結果はスクロール表示し、テキスト保存できます。
 --   ファイル名に音名がない場合は、テイク名から読み取ります。
 --   選択アイテムのアクティブテイクのみ対象。外部拡張は不要です。
 --   元の音声ファイルを書き換えず、テイクの設定を変更します。
@@ -24,12 +30,24 @@ local SHOW_SUCCESS_MESSAGE = true
 -- 意図しないテイク名で誤検出する場合は false にしてください。
 local READ_TAKE_NAME = true
 
-local TITLE = "人力：ファイル名から音程合わせ"
+local TITLE = "nama-ReaPitchMatch：ファイル名から音程合わせ"
+-- 既存ユーザーのチェック状態・前回音程を引き継ぐため、キー名は旧名のままです。
 local STATE_SECTION = "Jinriki_FilenamePitch_Soloist_v1"
 local NOTE_OFFSETS = { C = 0, D = 2, E = 4, F = 5, G = 7, A = 9, B = 11 }
 local NOTE_NAMES = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
-local MAX_REPORT_ROWS = 16
+local MAX_REPORT_ROWS = 200
 local MAX_NOTE_LENGTH = 24
+local VALIDATION_INTERVAL = 0.2
+local SHORT_ANALYSIS_SPAN = 0.08
+local SHORT_ANALYSIS_PAD = 0.060
+local MIN_CORRECTION_CONFIDENCE = 0.0
+local STABILITY_MAX_SPAN = 300
+local STABILITY_MAX_MAD = 40
+local STABILITY_MIN_COVERAGE = 0.25
+local STABILITY_MIN_FRAMES = 6
+local ANALYSIS_CHANNEL_MODE = "loudest" -- "loudest" または "mono"
+local REPORT_LINE_THRESHOLD = 20
+local REPORT_SIZE_THRESHOLD = 1500
 
 -- 音名として扱う拡張子だけを取り除きます。foo.A4 のような名前を
 -- 「A4という拡張子」と誤認しないようにするためです。
@@ -239,6 +257,17 @@ local function analysis_source_range(item_position, rate, offset, source_length,
   return source_range(source_length, source_offset, duration, loop)
 end
 
+-- 短いアイテムだけ、解析窓を元ソースの手前へ最大60ms広げます。
+-- 子音や立ち上がりを含められる一方、前の音を拾う可能性もあるため、
+-- 安定性ゲートと併用します。
+local function extend_short_range(start, span, item_length)
+  if item_length > 0 and item_length < SHORT_ANALYSIS_SPAN and span > 0 and start > 0 then
+    local pad = math.min(SHORT_ANALYSIS_PAD, start)
+    return start - pad, span + pad
+  end
+  return start, span
+end
+
 -- Native-rate source peaks return individual PCM samples. Reading the source
 -- avoids take pitch, time-stretching, volume and FX affecting the estimate.
 local function median(values)
@@ -248,6 +277,16 @@ local function median(values)
   local middle = math.floor((#copy + 1) / 2)
   if #copy % 2 == 1 then return copy[middle] end
   return (copy[middle] + copy[middle + 1]) / 2
+end
+
+local function percentile(values, fraction)
+  if #values == 0 then return 0 end
+  local copy = {}
+  for index, value in ipairs(values) do copy[index] = value end
+  table.sort(copy)
+  local index = math.floor(fraction * (#copy - 1)) + 1
+  index = math.max(1, math.min(#copy, index))
+  return copy[index]
 end
 
 local function frame_pitch(samples, sample_rate, expected, short)
@@ -324,14 +363,49 @@ local function choose_estimate(observations, span, expected, hop)
       confidence_sum = confidence_sum + candidate.confidence
     end
   end
-  -- 画面表示用の品質。frames は「音程が取れたフレーム数」で、
+  -- 画面表示と安定性ゲート用の品質。frames は「音程が取れたフレーム数」で、
   -- 解析した全フレーム数ではありません。
+  local all_cents = {}
+  for _, candidate in ipairs(observations) do all_cents[#all_cents + 1] = candidate.cents end
+  local all_mad = 0
+  if #all_cents > 0 then
+    local all_median = median(all_cents)
+    local deviations = {}
+    for index, value in ipairs(all_cents) do
+      deviations[index] = math.abs(value - all_median)
+    end
+    all_mad = median(deviations)
+  end
   local quality = {
     frames = #observations,
     voiced = #voiced,
     voiced_ratio = #observations > 0 and #voiced / #observations or 0,
     confidence = #voiced > 0 and confidence_sum / #voiced or 0,
+    span = percentile(all_cents, 0.9) - percentile(all_cents, 0.1),
+    mad = all_mad,
   }
+
+  -- 解析区間全体が大きく揺れている場合（グライド・フレーズ全体）は、
+  -- 一部の安定区間だけを拾って補正しないよう自動で止めます。
+  local function stability_problem()
+    if quality.frames < STABILITY_MIN_FRAMES then return nil end
+    if quality.span > STABILITY_MAX_SPAN then
+      return string.format("音程の揺れ幅が大きいため補正なし（%.0f cent）", quality.span)
+    end
+    if quality.mad > STABILITY_MAX_MAD then
+      return string.format("音程が安定しないため補正なし（MAD %.0f cent）", quality.mad)
+    end
+    if quality.voiced_ratio < STABILITY_MIN_COVERAGE then
+      return string.format("音名付近の有声区間が不足しているため補正なし（%d/%d）",
+        quality.voiced, quality.frames)
+    end
+  end
+
+  local function accepted(cents, description)
+    local problem = stability_problem()
+    if problem then return nil, nil, problem, false, quality end
+    return cents, description, nil, false, quality
+  end
 
   -- Keep out-of-range estimates too: their count alone cannot distinguish
   -- a transient/harmonic detection from a genuinely sustained second pitch.
@@ -388,8 +462,8 @@ local function choose_estimate(observations, span, expected, hop)
       local cents = median(inliers)
       local conflict = competing_pitch(cents)
       if conflict then return nil, nil, conflict, true, quality end
-      return cents, #inliers < #observations and "一時的な推定の外れを除外／" or "",
-        nil, false, quality
+      return accepted(cents,
+        #inliers < #observations and "一時的な推定の外れを除外／" or "")
     end
   end
 
@@ -403,7 +477,7 @@ local function choose_estimate(observations, span, expected, hop)
       local cents = (first.cents + second.cents) / 2
       local conflict = competing_pitch(cents)
       if conflict then return nil, nil, conflict, true, quality end
-      return cents, "短い有声区間を使用／", nil, false, quality
+      return accepted(cents, "短い有声区間を使用／")
     end
   end
 
@@ -418,8 +492,8 @@ local function choose_estimate(observations, span, expected, hop)
   if best then
     local conflict = competing_pitch(best.cents)
     if conflict then return nil, nil, conflict, true, quality end
-    return best.cents, string.format("安定した母音区間を使用（約%.0f ms）／", best.width * 1000),
-      nil, false, quality
+    return accepted(best.cents,
+      string.format("安定した母音区間を使用（約%.0f ms）／", best.width * 1000))
   end
   if #voiced < 3 then
     local reason = #observations > #voiced
@@ -462,6 +536,7 @@ local function analyze_source(entry, progress)
   local start, span = analysis_source_range(item_position, rate, offset, source_length,
     reaper.GetMediaItemInfo_Value(item, "B_LOOPSRC") ~= 0, play_start, play_end)
   if not start then return nil, "解析範囲がないため補正なし" end
+  start, span = extend_short_range(start, span, item_length)
   -- At least 4.5 expected periods, with a small absolute floor. For D4 this
   -- permits roughly 16 ms instead of rejecting everything below 80 ms.
   local minimum_span = math.max(0.012, 4.5 / expected)
@@ -503,21 +578,40 @@ local function analyze_source(entry, progress)
         return nil, nil, "元音声を十分な精度で取得できないため補正なし"
       end
     end
-    local chosen, maximum = 1, -1
+    local allowed = {}
     for channel = 1, channels do
-      if (channel_mode ~= 3 or channel == 1) and (channel_mode ~= 4 or channel == math.min(2, channels)) then
+      if (channel_mode ~= 3 or channel == 1)
+        and (channel_mode ~= 4 or channel == math.min(2, channels)) then
+        allowed[#allowed + 1] = channel
+      end
+    end
+    local samples = {}
+    if ANALYSIS_CHANNEL_MODE == "mono" and #allowed > 1 then
+      local scale = 1 / #allowed
+      for index = 1, count do
+        local value = 0
+        for step = 0, stride - 1 do
+          local base = ((index - 1) * stride + step) * channels
+          for _, channel in ipairs(allowed) do
+            value = value + pcm[base + channel] * scale
+          end
+        end
+        samples[index] = value / stride
+      end
+    else
+      local chosen, maximum = allowed[1] or 1, -1
+      for _, channel in ipairs(allowed) do
         local energy = 0
         for index = channel, block, channels do energy = energy + pcm[index] ^ 2 end
         if energy > maximum then maximum, chosen = energy, channel end
       end
-    end
-    local samples = {}
-    for index = 1, count do
-      local value = 0
-      for step = 0, stride - 1 do
-        value = value + pcm[((index - 1) * stride + step) * channels + chosen]
+      for index = 1, count do
+        local value = 0
+        for step = 0, stride - 1 do
+          value = value + pcm[((index - 1) * stride + step) * channels + chosen]
+        end
+        samples[index] = value / stride
       end
-      samples[index] = value / stride
     end
     local frequency, rms, confidence = frame_pitch(samples, analysis_rate, expected, span < 0.08)
     if frequency then
@@ -530,8 +624,8 @@ local function analyze_source(entry, progress)
   end
   local function quality_text(quality)
     if not quality or quality.frames == 0 then return "" end
-    return string.format("検出 %d/%d・確信度 %.2f",
-      quality.voiced, quality.frames, quality.confidence)
+    return string.format("検出 %d/%d・確信度 %.2f・揺れ %.0f cent",
+      quality.voiced, quality.frames, quality.confidence, quality.span or 0)
   end
   local failure
   for pass, window in ipairs({math.max(0.018, 6 / expected), math.max(0.010, 4 / expected)}) do
@@ -539,6 +633,13 @@ local function analyze_source(entry, progress)
     if not observations then return nil, problem end
     local cents, description, reason, conflict, quality =
       choose_estimate(observations, span, expected, hop)
+    if cents and quality and quality.confidence < MIN_CORRECTION_CONFIDENCE then
+      local note = string.format("確信度 %.2f が下限 %.2f 未満のため補正なし",
+        quality.confidence, MIN_CORRECTION_CONFIDENCE)
+      local quality_note = quality_text(quality)
+      if quality_note ~= "" then note = note .. "／" .. quality_note end
+      return nil, note
+    end
     if cents then
       local rounded = math.floor(math.abs(cents) * 10 + 0.5) / 10
       if cents < 0 then rounded = -rounded end
@@ -559,7 +660,8 @@ end
 local function show_pitch_dialog(default, title, on_submit, initial_status)
   local text, caret, selected_all = default, #default, true
   local checked = reaper.GetExtState(STATE_SECTION, "analyze_audio") == "1"
-  local focus, status, worker, closed, previous_mouse = 0, initial_status or "", nil, false, false
+  local focus, status, worker, closed, previous_mouse = 0, "", nil, false, false
+  local notice = initial_status or ""
   local progress_fraction = 0
   local reply = table.pack()
   local function close()
@@ -621,7 +723,11 @@ local function show_pitch_dialog(default, title, on_submit, initial_status)
       gfx.set(0.4, 0.85, 1, 1); gfx.line(37, 146, 42, 152); gfx.line(42, 152, 50, 141)
     end
     label(66, 133, "音声を解析してセント補正する", 18)
-    label(32, 171, "チェック状態は次回の実行にも引き継ぎます。", 14, 0.6, 0.65, 0.72)
+    if notice ~= "" then
+      label(32, 171, notice, 14, 0.95, 0.78, 0.4)
+    else
+      label(32, 171, "チェック状態は次回の実行にも引き継ぎます。", 14, 0.6, 0.65, 0.72)
+    end
     label(32, 198, status ~= "" and status or "解析できない素材は、補正なしで移調します。", 14, 0.8, 0.8, 0.72)
     if worker then
       local bar_y, bar_width = 224, gfx.w - 64
@@ -783,6 +889,61 @@ local function write_settings(take, settings)
   end
 end
 
+local function has_pitch_fx_name(name)
+  if not name then return false end
+  return name:lower():find("pitch", 1, true) ~= nil
+    or name:find("ピッチ", 1, true) ~= nil
+end
+
+-- 適用後に最終音程へ影響し得る既存設定を集めます。ブロックはせず、
+-- ダイアログ上部と結果レポートに注意として表示します。
+local function pitch_warnings(entry)
+  local warnings = {}
+  local old = entry.old or read_settings(entry.take)
+  if math.abs(old.pitch) > 1e-9 then
+    warnings[#warnings + 1] = string.format("既存ピッチ %+.3f 半音を上書き", old.pitch)
+  end
+  local rate = reaper.GetMediaItemTakeInfo_Value(entry.take, "D_PLAYRATE")
+  if rate > 0 and math.abs(rate - 1) > 1e-9 and old.preserve == 0 then
+    warnings[#warnings + 1] = string.format(
+      "再生レート %.3f・ピッチ保持をONに変更（聞こえ方が変わります）", rate)
+  end
+  if reaper.GetTakeEnvelopeByName then
+    local ok, envelope = pcall(reaper.GetTakeEnvelopeByName, entry.take, "Pitch")
+    if ok and envelope then
+      warnings[#warnings + 1] = "テイクのPitch Envelopeがあります（最終音程がずれる可能性）"
+    end
+  end
+  if reaper.TakeFX_GetCount and reaper.TakeFX_GetFXName then
+    local ok_count, take_fx_count = pcall(reaper.TakeFX_GetCount, entry.take)
+    if ok_count then
+      for index = 0, take_fx_count - 1 do
+        local ok, returned, name = pcall(reaper.TakeFX_GetFXName, entry.take, index)
+        if ok and returned and has_pitch_fx_name(name) then
+          warnings[#warnings + 1] = "テイクFXにピッチシフトがあります（最終音程がずれる可能性）"
+          break
+        end
+      end
+    end
+  end
+  if reaper.GetMediaItemTake_Track and reaper.TrackFX_GetCount and reaper.TrackFX_GetFXName then
+    local ok_track, track = pcall(reaper.GetMediaItemTake_Track, entry.take)
+    if ok_track and track then
+      local ok_count, track_fx_count = pcall(reaper.TrackFX_GetCount, track)
+      if ok_count then
+        for index = 0, track_fx_count - 1 do
+          local ok, returned, name = pcall(reaper.TrackFX_GetFXName, track, index)
+          if ok and returned and has_pitch_fx_name(name) then
+            warnings[#warnings + 1] = "トラックFXにピッチシフトがあります（最終音程がずれる可能性）"
+            break
+          end
+        end
+      end
+    end
+  end
+  return warnings
+end
+
 local function report_rows(rows)
   local text = {}
   for index = 1, math.min(#rows, MAX_REPORT_ROWS) do
@@ -794,10 +955,136 @@ local function report_rows(rows)
   return table.concat(text, "\n")
 end
 
+local function report_path()
+  local directory = reaper.GetProjectPath("")
+  if directory == "" then directory = reaper.GetResourcePath() end
+  return directory .. "/nama-ReaPitchMatch-report.txt"
+end
+
+local function save_report(text)
+  local path = report_path()
+  local file, problem = io.open(path, "wb")
+  if not file then return nil, problem end
+  file:write(text)
+  file:close()
+  return path
+end
+
+-- 長い結果はスクロール可能なウィンドウで表示します。
+-- ホイール / ↑↓ / Home / End でスクロール、Ctrl+Sで保存、Escで閉じます。
+local function show_report(title, text)
+  local lines = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+  local closed, scroll, status, previous_mouse = false, 0, "", false
+  local line_height, top, bottom = 22, 54, 66
+  local function close()
+    if not closed then closed = true; gfx.quit() end
+  end
+  local function visible_count()
+    return math.max(1, math.floor((gfx.h - top - bottom) / line_height))
+  end
+  local function scroll_to(value)
+    local maximum = math.max(0, #lines - visible_count())
+    scroll = math.max(0, math.min(maximum, value))
+  end
+  local function remember(message)
+    local path, problem = save_report(text)
+    status = path and ("保存しました: " .. path)
+      or ("保存できません: " .. tostring(problem))
+  end
+  reaper.atexit(close)
+  gfx.init(title, 780, 540, 0)
+  local function draw()
+    gfx.set(0.09, 0.105, 0.13, 1); gfx.rect(0, 0, gfx.w, gfx.h, true)
+    gfx.setfont(1, "Yu Gothic UI", 16)
+    gfx.set(0.9, 0.92, 0.95, 1); gfx.x, gfx.y = 20, 14
+    gfx.drawstr(title, 0, gfx.w - 40, 30)
+    local visible = visible_count()
+    scroll_to(scroll)
+    gfx.setfont(1, "Yu Gothic UI", 14)
+    for index = 1, visible do
+      local line = lines[scroll + index]
+      if not line then break end
+      gfx.set(0.86, 0.89, 0.93, 1)
+      gfx.x, gfx.y = 20, top + (index - 1) * line_height
+      gfx.drawstr(line, 0, gfx.w - 46, gfx.h)
+    end
+    if #lines > visible then
+      local track_x, track_y = gfx.w - 18, top
+      local track_h = gfx.h - top - bottom
+      local thumb_h = math.max(24, track_h * visible / #lines)
+      local thumb_y = track_y + (track_h - thumb_h) * scroll / math.max(1, #lines - visible)
+      gfx.set(0.16, 0.19, 0.24, 1); gfx.rect(track_x, track_y, 6, track_h, true)
+      gfx.set(0.4, 0.55, 0.7, 1); gfx.rect(track_x, thumb_y, 6, thumb_h, true)
+    end
+    local save_x, close_x = gfx.w - 250, gfx.w - 130
+    gfx.set(0.16, 0.39, 0.59, 1); gfx.rect(save_x, gfx.h - 50, 110, 34, true)
+    gfx.set(0.22, 0.25, 0.3, 1); gfx.rect(close_x, gfx.h - 50, 110, 34, true)
+    gfx.setfont(1, "Yu Gothic UI", 15); gfx.set(0.9, 0.92, 0.95, 1)
+    gfx.x, gfx.y = save_x + 24, gfx.h - 45; gfx.drawstr("保存", 0, 100, 30)
+    gfx.x, gfx.y = close_x + 22, gfx.h - 45; gfx.drawstr("閉じる", 0, 100, 30)
+    gfx.setfont(1, "Yu Gothic UI", 12); gfx.set(0.55, 0.6, 0.68, 1)
+    gfx.x, gfx.y = 20, gfx.h - 18
+    gfx.drawstr("ホイール/↑↓: スクロール  Ctrl+S: 保存  Esc: 閉じる",
+      0, gfx.w - 280, 20)
+    if status ~= "" then
+      gfx.set(0.75, 0.82, 0.65, 1)
+      gfx.x, gfx.y = 20, gfx.h - 40
+      gfx.drawstr(status, 0, gfx.w - 280, 20)
+    end
+    gfx.update()
+  end
+  local function loop()
+    if closed then return end
+    local ok, problem = xpcall(function()
+      draw()
+      local key = gfx.getchar()
+      if key == -1 or key == 27 then close(); return end
+      if key == 1818584692 then scroll_to(scroll - 1)
+      elseif key == 1919379572 then scroll_to(scroll + 1)
+      elseif key == 1752132965 then scroll_to(0)
+      elseif key == 6647396 then scroll_to(#lines)
+      elseif key == 19 then remember()
+      end
+      local wheel = gfx.mouse_wheel or 0
+      if wheel ~= 0 then scroll_to(scroll - wheel); gfx.mouse_wheel = 0 end
+      local down = (gfx.mouse_cap & 1) ~= 0
+      local click = down and not previous_mouse
+      previous_mouse = down
+      if click and gfx.mouse_y >= gfx.h - 50 and gfx.mouse_y <= gfx.h - 16 then
+        if gfx.mouse_x >= gfx.w - 250 and gfx.mouse_x <= gfx.w - 140 then
+          remember()
+        elseif gfx.mouse_x >= gfx.w - 130 and gfx.mouse_x <= gfx.w - 20 then
+          close(); return
+        end
+      end
+      if not closed then reaper.defer(loop) end
+    end, debug.traceback)
+    if not ok then
+      close()
+      reaper.ShowMessageBox("レポート表示に失敗しました。\n\n" .. tostring(problem), TITLE, 0)
+    end
+  end
+  reaper.defer(loop)
+end
+
+local function show_summary(summary)
+  local line_count = 1
+  for _ in summary:gmatch("\n") do line_count = line_count + 1 end
+  if #summary > REPORT_SIZE_THRESHOLD or line_count > REPORT_LINE_THRESHOLD then
+    show_report(TITLE, summary)
+  else
+    reaper.ShowMessageBox(summary, TITLE, 0)
+  end
+end
+
 local function apply_entries(project, entries, skipped, soloist, target_note, target_label, analyze)
   local changes, details = {}, {}
+  local warning_count = 0
   for _, entry in ipairs(entries) do
     entry.old = read_settings(entry.take)
+    entry.pitch_warnings = pitch_warnings(entry)
+    warning_count = warning_count + #entry.pitch_warnings
     local pitch = target_note - entry.source_note + (entry.correction or 0)
     local base_mode = soloist.index * 65536
     -- 同じSoloistの詳細設定は維持。それ以外からの切替時は詳細設定0。
@@ -813,6 +1100,9 @@ local function apply_entries(project, entries, skipped, soloist, target_note, ta
     if entry.analysis_limited and entry.analysis_play_start then
       details[#details + 1] = string.format("  解析範囲：%.3f〜%.3f 秒",
         entry.analysis_play_start, entry.analysis_play_end)
+    end
+    for _, warning in ipairs(entry.pitch_warnings) do
+      details[#details + 1] = "  ※ " .. warning
     end
     if entry.analysis_status then details[#details + 1] = "  " .. entry.analysis_status end
   end
@@ -867,12 +1157,15 @@ local function apply_entries(project, entries, skipped, soloist, target_note, ta
     if analyze then
       summary = summary .. string.format("セント補正：%d 件成功／%d 件は補正なし\n", #entries - analysis_failures, analysis_failures)
     else summary = summary .. "音声解析：オフ\n" end
+    if warning_count > 0 then
+      summary = summary .. string.format("注意：既存ピッチ設定 %d 件（詳細は下記）\n", warning_count)
+    end
     if #changes == 0 then summary = summary .. "すでに指定の設定になっています。\n" end
     summary = summary .. "\n" .. report_rows(details)
     if #skipped > 0 then
       summary = summary .. string.format("\n\nスキップ %d 件：\n", #skipped) .. report_rows(skipped)
     end
-    reaper.ShowMessageBox(summary, TITLE, 0)
+    show_summary(summary)
   end
 end
 
@@ -942,7 +1235,7 @@ local function main()
         or (take_name ~= "" and take_name) or ("選択項目 " .. (index + 1))
       skipped[#skipped + 1] = label .. "：" .. reason
     else
-      entries[#entries + 1] = {
+      local entry = {
         item = item, take = take,
         filename = filename ~= "" and basename(filename) or "(ファイル名なし)",
         name_source = name_source or "ファイル名",
@@ -955,6 +1248,8 @@ local function main()
         source = reaper.GetMediaItemTake_Source(take),
         old = read_settings(take)
       }
+      entry.pitch_warnings = pitch_warnings(entry)
+      entries[#entries + 1] = entry
     end
   end
   if #entries == 0 then
@@ -988,12 +1283,22 @@ local function main()
   end
   local input_title = string.format("%s（対象 %d 件）", TITLE, #entries)
   if midi_status then input_title = input_title .. " / " .. midi_status end
-  local initial_status = ""
+  local warning_count = 0
+  for _, entry in ipairs(entries) do
+    warning_count = warning_count + #(entry.pitch_warnings or {})
+  end
+  local notices = {}
   if has_time_selection then
     input_title = input_title .. " / 時間選択"
-    initial_status = string.format("時間選択 %.3f〜%.3f 秒の範囲を解析します。",
+    notices[#notices + 1] = string.format("時間選択 %.3f〜%.3f 秒",
       selection_start, selection_end)
   end
+  if warning_count > 0 then
+    input_title = input_title .. " / 注意"
+    notices[#notices + 1] = string.format("注意：既存ピッチ設定 %d 件（結果に詳細）",
+      warning_count)
+  end
+  local initial_status = table.concat(notices, " / ")
   local function validate_entries()
     if reaper.EnumProjects(-1, "") ~= project then
       error("プロジェクトが切り替わりました。対象を確認して再実行してください。", 0)
@@ -1020,13 +1325,21 @@ local function main()
     local project_state = reaper.GetProjectStateChangeCount(project)
     if analyze then
       local total = #entries
-      progress("解析を準備中…", 0)
-      for index, entry in ipairs(entries) do
-        local ok, correction, message = pcall(analyze_source, entry, function(frame, frames)
+      local last_validation = 0
+      local function validate_if_due()
+        local now = reaper.time_precise()
+        if now - last_validation >= VALIDATION_INTERVAL then
+          last_validation = now
           validate_entries()
           if reaper.GetProjectStateChangeCount(project) ~= project_state then
             error("解析中にプロジェクトが変更されました。再実行してください。", 0)
           end
+        end
+      end
+      progress("解析を準備中…", 0)
+      for index, entry in ipairs(entries) do
+        local ok, correction, message = pcall(analyze_source, entry, function(frame, frames)
+          validate_if_due()
           local fraction = ((index - 1) + frame / math.max(1, frames)) / total
           progress(string.format("解析 %d/%d：%s（%d/%d）", index, total, entry.filename, frame, frames),
             fraction)
@@ -1073,6 +1386,7 @@ if _G.NAMA_PITCHMATCH_TEST then
     note_from_filename = note_from_filename,
     note_from_take_name = note_from_take_name,
     median = median,
+    percentile = percentile,
     frame_pitch = frame_pitch,
     choose_estimate = choose_estimate,
     version_parts = version_parts,
@@ -1089,6 +1403,8 @@ if _G.NAMA_PITCHMATCH_TEST then
     source_range = source_range,
     intersect_time_selection = intersect_time_selection,
     analysis_source_range = analysis_source_range,
+    extend_short_range = extend_short_range,
+    pitch_warnings = pitch_warnings,
   }
   return
 end

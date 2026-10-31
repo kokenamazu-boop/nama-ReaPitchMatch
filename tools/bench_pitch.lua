@@ -8,13 +8,13 @@
 --   id  raw_path  sample_rate  expected_hz  span_seconds  short(0/1)
 --
 -- This harness is intentionally outside the production script. It uses the
--- public test hook in Jinriki_FilenamePitch_to_Target_Soloist.lua so the
+-- public test hook in nama-ReaPitchMatch.lua so the
 -- detector itself is not duplicated.
 local tool_dir = debug.getinfo(1, "S").source:match("^@(.+[\\/])") or "tools/"
 local root = tool_dir .. "../"
 
 _G.NAMA_PITCHMATCH_TEST = true
-dofile(root .. "Jinriki_FilenamePitch_to_Target_Soloist.lua")
+dofile(root .. "nama-ReaPitchMatch.lua")
 local M = assert(_G.NAMA_PITCHMATCH_TEST_API, "test API is not available")
 
 local manifest_path, output_path = arg[1], arg[2]

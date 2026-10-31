@@ -4,7 +4,7 @@ local test_dir = debug.getinfo(1, "S").source:match("^@(.+[\\/])") or "tests/"
 local root = test_dir .. "../"
 
 _G.NAMA_PITCHMATCH_TEST = true
-dofile(root .. "Jinriki_FilenamePitch_to_Target_Soloist.lua")
+dofile(root .. "nama-ReaPitchMatch.lua")
 local M = assert(_G.NAMA_PITCHMATCH_TEST_API, "テスト用APIが公開されていません")
 
 local passed = 0
@@ -184,6 +184,8 @@ test("choose_estimate: stable plateau", function()
   eq(quality.voiced, 10)
   near(quality.voiced_ratio, 1.0)
   assert(quality.confidence > 0.9)
+  assert(quality.span <= 10.0)
+  assert(quality.mad <= 5.0)
 end)
 
 test("source_range: non-loop", function()
@@ -225,6 +227,19 @@ test("analysis_source_range: time selection mapping", function()
   eq(M.analysis_source_range(10, 0, 0, 10, false, 10, 12), nil)
 end)
 
+test("extend_short_range", function()
+  local start, span = M.extend_short_range(0.1, 0.05, 0.05)
+  near(start, 0.04); near(span, 0.11)
+  start, span = M.extend_short_range(0.02, 0.05, 0.05)
+  near(start, 0.0); near(span, 0.07)
+  start, span = M.extend_short_range(0.1, 0.2, 0.5)
+  near(start, 0.1); near(span, 0.2)
+  start, span = M.extend_short_range(0.1, 0.05, 0.2)
+  near(start, 0.1); near(span, 0.05)
+  start, span = M.extend_short_range(0.0, 0.0, 0.05)
+  near(start, 0.0); near(span, 0.0)
+end)
+
 test("choose_estimate: competing plateau is rejected", function()
   local observations = {}
   for index = 1, 10 do observations[index] = observation(index * 0.01, 10, 0.5) end
@@ -255,6 +270,21 @@ test("choose_estimate: unstable pitch is rejected", function()
   assert(type(reason) == "string" and #reason > 0)
 end)
 
+test("choose_estimate: whole-region glide is rejected", function()
+  local observations = {}
+  for index = 1, 10 do
+    observations[index] = observation(index * 0.01, 0, 0.5, 0.99)
+  end
+  for index = 11, 20 do
+    observations[index] = observation(index * 0.01, 300 + (index - 11) * 10, 0.5, 0.85)
+  end
+  local value, _, reason, conflict, quality = M.choose_estimate(observations, 0.2, 440, 0.01)
+  eq(value, nil)
+  eq(conflict, false)
+  assert(reason:find("揺れ幅", 1, true) or reason:find("安定", 1, true))
+  assert(quality.span > 200)
+end)
+
 test("version comparison", function()
   local left = M.version_parts("Soloist v2.10")
   local right = M.version_parts("Soloist v2.9")
@@ -268,11 +298,11 @@ end)
 
 test("report_rows truncation", function()
   local rows = {}
-  for index = 1, 20 do rows[index] = "row " .. index end
+  for index = 1, 205 do rows[index] = "row " .. index end
   local text = M.report_rows(rows)
-  assert(text:find("row 16", 1, true))
-  assert(not text:find("row 17", 1, true))
-  assert(text:find("…ほか 4 件", 1, true))
+  assert(text:find("row 200", 1, true))
+  assert(not text:find("row 201", 1, true))
+  assert(text:find("…ほか 5 件", 1, true))
 end)
 
 print(string.format("OK: %d tests passed", passed))

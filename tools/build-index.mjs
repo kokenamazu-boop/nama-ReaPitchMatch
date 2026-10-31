@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const scriptName = "Jinriki_FilenamePitch_to_Target_Soloist.lua";
+const scriptName = "nama-ReaPitchMatch.lua";
 const repoUrl = "https://github.com/kokenamazu-boop/nama-ReaPitchMatch";
 const repoName = "nama-ReaPitchMatch";
 

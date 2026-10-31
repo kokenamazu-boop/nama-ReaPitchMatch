@@ -32,6 +32,24 @@ function R.EnumPitchShiftModes(index)
   if name then return true, name end
   return false
 end
+function R.GetTakeEnvelopeByName(take_object, name)
+  return take_object.pitchEnvelope and {} or nil
+end
+function R.TakeFX_GetCount(take_object)
+  return #(take_object.fx or {})
+end
+function R.TakeFX_GetFXName(take_object, index)
+  return true, (take_object.fx or {})[index + 1] or ""
+end
+function R.GetMediaItemTake_Track(take_object)
+  return take_object.track
+end
+function R.TrackFX_GetCount(track)
+  return #(track.fx or {})
+end
+function R.TrackFX_GetFXName(track, index)
+  return true, (track.fx or {})[index + 1] or ""
+end
 
 local function take(initial)
   return {
@@ -52,7 +70,7 @@ end
 
 _G.reaper = R
 _G.NAMA_PITCHMATCH_TEST = true
-dofile(root .. "Jinriki_FilenamePitch_to_Target_Soloist.lua")
+dofile(root .. "nama-ReaPitchMatch.lua")
 local M = assert(_G.NAMA_PITCHMATCH_TEST_API, "テスト用APIが公開されていません")
 
 local passed = 0
@@ -90,6 +108,23 @@ test("read/write settings", function()
   near(object.D_PITCH, -2)
   eq(object.I_PITCHMODE, 65536)
   eq(object.B_PPITCH, 0)
+end)
+
+test("pitch_warnings: existing pitch, playrate, envelope, takeFX, trackFX", function()
+  local object = take({ pitch = 1.5, preserve = 0 })
+  object.D_PLAYRATE = 0.5
+  object.pitchEnvelope = true
+  object.fx = { "ReaPitch" }
+  object.track = { fx = { "ReaPitch" } }
+  local item = entry(object, "a_D4.wav", 62)
+  item.old = M.read_settings(object)
+  local warnings = M.pitch_warnings(item)
+  local text = table.concat(warnings, "\n")
+  assert(text:find("既存ピッチ", 1, true))
+  assert(text:find("再生レート", 1, true))
+  assert(text:find("Pitch Envelope", 1, true))
+  assert(text:find("テイクFX", 1, true))
+  assert(text:find("トラックFX", 1, true))
 end)
 
 test("apply_entries: basic pitch change and undo block", function()

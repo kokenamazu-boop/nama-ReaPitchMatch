@@ -28,14 +28,14 @@ REAPERで、**ファイル名に書かれた音名**を読み取り、選択し�
    https://github.com/kokenamazu-boop/nama-ReaPitchMatch/raw/main/index.xml
    ```
 
-3. `nama-ReaPitchMatch` の `Jinriki_FilenamePitch_to_Target_Soloist.lua` をインストールします。
+3. `nama-ReaPitchMatch` の `nama-ReaPitchMatch.lua` をインストールします。
 4. `Extensions → ReaPack → Browse packages` からスクリプトを実行するか、アクションリストに登録して実行します。
 
 `index.xml` は `tools/build-index.mjs` がLuaのメタデータと現在のコミットから生成し、GitHub Actionsが更新します。手元で更新する場合は `node tools/build-index.mjs` を実行してください。
 
 ### 手動で入れる場合
 
-1. [`Jinriki_FilenamePitch_to_Target_Soloist.lua`](./Jinriki_FilenamePitch_to_Target_Soloist.lua) をダウンロードします。
+1. [`nama-ReaPitchMatch.lua`](./nama-ReaPitchMatch.lua) をダウンロードします。
 2. REAPERの `Options → Show REAPER resource path...` で開くフォルダー内の `Scripts` に置きます。
 3. `Actions → Show action list → New action → Load ReaScript...` で、置いたファイルを選びます。
 4. アクションリストから実行します。
@@ -124,7 +124,9 @@ local READ_TAKE_NAME = true
 - ファイル名の音名から**±50セント以内**の安定区間を探します。
 - 別の音程の安定区間が混在する場合は、誤補正を避けるため**補正なし**にします。
 - 推定値は0.1セント単位に丸め、`D_PITCH` に加算します。
-- 結果には「検出 n/m・確信度 0.xx」を表示します。mは音程が取れたフレーム数、nはそのうち音名から±50セント以内だったフレーム数です。数値が低い場合は補正の根拠が弱いため、元に戻して聴き直してください。
+- **区間全体がグライドしている場合**は、一部の安定区間だけを拾って補正しないよう自動で止めます。
+- **80ms未満の短いアイテム**は、元ソースの手前へ最大60msだけ解析窓を広げます。前の音を拾わないよう、安定性ゲートと併用します。
+- 結果には「検出 n/m・確信度 0.xx・揺れ xx cent」を表示します。mは音程が取れたフレーム数、nはそのうち音名から±50セント以内だったフレーム数です。数値が低い場合は補正の根拠が弱いため、元に戻して聴き直してください。
 
 ### 補正が入らない主な条件
 
@@ -134,6 +136,7 @@ local READ_TAKE_NAME = true
 - 無音、息だけ、非常に小さい音
 - ポリフォニック（和音、重なった声）
 - ビブラートや音程の揺れが大きく、安定区間を選べない
+- 区間全体の揺れ幅が大きい（自動安定性ゲート）
 - 別の音程が安定して混在している
 - 元音声のPCMを十分な精度で取得できない
 
@@ -145,8 +148,17 @@ local READ_TAKE_NAME = true
 
 - すでに同じSoloistモードを使っているテイクは、**サブモード（詳細設定）を維持**します。
 - 別のモードから切り替える場合は、サブモードを0にします。
-- テイクの `B_PPITCH`（再生レート変更時にピッチを保持）を1にします。
+- テイクの `B_PPITCH`（再生レート変更時にピッチを保持）を1にします。再生レートが1でないテイクでは、適用前に警告します。
 - Soloistが見つからない場合は設定を変更せず、利用可能なピッチシフトモードの一覧を表示します。
+
+### 既存ピッチ設定の警告
+
+適用後に最終音程へ影響し得る設定がある場合、ダイアログ上部と結果レポートに注意を表示します。**自動ではスキップしません**。内容を確認してから適用してください。
+
+- 既存の `D_PITCH` を上書きする
+- 再生レートが1以外で、ピッチ保持OFFのテイク（適用すると聞こえ方が変わる）
+- テイクのPitch Envelope
+- テイクFX / トラックFXのピッチシフト（FX名に `pitch` または `ピッチ` を含むもの）
 
 ## 安全設計
 
@@ -154,7 +166,17 @@ local READ_TAKE_NAME = true
 - 変更は1つのUndoブロックにまとめます。
 - 設定変更に失敗した場合は、その実行で触れたテイクの設定を元に戻します。
 - 解析中にプロジェクトが変更された場合や、対象アイテムの状態が変わった場合は、適用せずに中止します。
+- 解析中の状態確認は200ms間隔で行い、大量アイテム時の負荷を抑えます。
 - 解析に失敗しても、移調自体は補正なしで続行します。
+
+## レポート
+
+結果が長い場合（20行または1500文字超）は、スクロール可能なレポートウィンドウで表示します。
+
+- ホイール / `↑` `↓` / `Home` / `End` でスクロール
+- `Ctrl+S` または「保存」で、プロジェクトフォルダーの `nama-ReaPitchMatch-report.txt` に保存
+- `Esc` または「閉じる」で終了
+- 短い結果は従来どおりメッセージボックスで表示します。
 
 ## 設定
 
@@ -164,6 +186,15 @@ local READ_TAKE_NAME = true
 | --- | --- | --- |
 | `SHOW_SUCCESS_MESSAGE` | `true` | 完了ダイアログを表示する。連続作業では `false` にすると速い |
 | `READ_TAKE_NAME` | `true` | ファイル名に音名がないとき、テイク名も読む |
+| `MIN_CORRECTION_CONFIDENCE` | `0.0` | 確信度がこれ未満なら補正なし。`0` で無効 |
+| `STABILITY_MAX_SPAN` | `300` | 区間全体の揺れ幅上限（cent）。超えると補正なし |
+| `STABILITY_MAX_MAD` | `40` | 区間全体のMAD上限（cent） |
+| `STABILITY_MIN_COVERAGE` | `0.25` | 音名±50cent内のフレーム比率の下限 |
+| `STABILITY_MIN_FRAMES` | `6` | 安定性ゲートを適用する最小フレーム数 |
+| `SHORT_ANALYSIS_SPAN` | `0.08` | これ未満を「短いアイテム」とみなす（秒） |
+| `SHORT_ANALYSIS_PAD` | `0.060` | 短いアイテムで手前へ広げる最大秒 |
+| `ANALYSIS_CHANNEL_MODE` | `"loudest"` | `"mono"` で全チャンネル平均。定位が偏る素材は `"loudest"` のまま |
+| `VALIDATION_INTERVAL` | `0.2` | 解析中の状態確認間隔（秒） |
 
 チェック状態と直前の目標音は、REAPERのExtState `Jinriki_FilenamePitch_Soloist_v1` に保存します。
 
@@ -180,7 +211,7 @@ lua tests/test_reaper_logic.lua
 python3 tests/check_index.py
 ```
 
-Luaのテストは合計38件です。`check_index.py` は `index.xml` のバージョン・作者・説明・ダウンロードURLがLuaのメタデータと一致するか確認します。GitHub Actionsでも、push時に構文チェックとテストを実行します。
+Luaのテストは合計41件です。`check_index.py` は `index.xml` のバージョン・作者・説明・ダウンロードURLがLuaのメタデータと一致するか確認します。GitHub Actionsでも、push時に構文チェックとテストを実行します。
 
 ## ピッチ検出ベンチマーク（開発者向け）
 

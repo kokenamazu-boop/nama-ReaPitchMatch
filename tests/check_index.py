@@ -5,7 +5,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parent.parent
-script_name = "Jinriki_FilenamePitch_to_Target_Soloist.lua"
+script_name = "nama-ReaPitchMatch.lua"
 lua = (root / script_name).read_text(encoding="utf-8")
 
 
