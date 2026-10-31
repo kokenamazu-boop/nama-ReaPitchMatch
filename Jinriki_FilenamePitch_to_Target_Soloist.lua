@@ -943,6 +943,8 @@ local function main()
         analysis_play_start = analysis_play_start,
         analysis_play_end = analysis_play_end,
         analysis_limited = analysis_limited,
+        position = item_position,
+        length = item_length,
         source = reaper.GetMediaItemTake_Source(take),
         old = read_settings(take)
       }
@@ -989,11 +991,18 @@ local function main()
     if reaper.EnumProjects(-1, "") ~= project then
       error("プロジェクトが切り替わりました。対象を確認して再実行してください。", 0)
     end
+    local current_start, current_end = read_time_selection(project)
+    if math.abs(current_start - selection_start) > 1e-9
+      or math.abs(current_end - selection_end) > 1e-9 then
+      error("時間選択が変わりました。再実行してください。", 0)
+    end
     for _, entry in ipairs(entries) do
       if not reaper.ValidatePtr2(project, entry.item, "MediaItem*")
         or not reaper.ValidatePtr2(project, entry.take, "MediaItem_Take*")
         or reaper.GetActiveTake(entry.item) ~= entry.take
         or reaper.GetMediaItemTake_Source(entry.take) ~= entry.source
+        or math.abs(reaper.GetMediaItemInfo_Value(entry.item, "D_POSITION") - entry.position) > 1e-9
+        or math.abs(reaper.GetMediaItemInfo_Value(entry.item, "D_LENGTH") - entry.length) > 1e-9
         or reaper.GetMediaItemInfo_Value(entry.item, "C_LOCK") % 2 == 1 then
         error("対象アイテムの状態が変わりました。対象を確認して再実行してください。", 0)
       end
@@ -1020,7 +1029,8 @@ local function main()
           -- 対象やプロジェクトが変わった場合は、補正なしで続行せず中止します。
           if problem:find("プロジェクトが切り替わりました", 1, true)
             or problem:find("対象アイテムの状態が変わりました", 1, true)
-            or problem:find("解析中にプロジェクトが変更されました", 1, true) then
+            or problem:find("解析中にプロジェクトが変更されました", 1, true)
+            or problem:find("時間選択が変わりました", 1, true) then
             error(problem, 0)
           end
           correction, message = nil, "音声を読み取れないため補正なし"
