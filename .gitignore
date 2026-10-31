@@ -27,6 +27,7 @@
 # Build artifacts
 *.zip
 dist/
+pitch-benchmark*.csv
 
 # OS / editor
 .DS_Store

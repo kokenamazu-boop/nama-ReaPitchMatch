@@ -1,0 +1,2 @@
+# Only the development benchmark uses numpy. The ReaScript itself has no dependencies.
+numpy>=1.24

@@ -28,3 +28,12 @@ jobs:
 
       - name: Validate ReaPack index
         run: python3 tests/check_index.py
+
+      - name: Check benchmark syntax
+        run: python3 -m py_compile tools/pitch_benchmark.py
+
+      - name: Install benchmark dependency
+        run: python3 -m pip install numpy
+
+      - name: Run benchmark self-test
+        run: python3 tools/pitch_benchmark.py --self-test --lua lua5.4

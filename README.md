@@ -168,6 +168,25 @@ python3 tests/check_index.py
 
 Luaのテストは合計34件です。`check_index.py` は `index.xml` のバージョン・作者・説明・ダウンロードURLがLuaのメタデータと一致するか確認します。GitHub Actionsでも、push時に構文チェックとテストを実行します。
 
+## ピッチ検出ベンチマーク（開発者向け）
+
+`tools/pitch_benchmark.py` は、FCPEで音程を付けた `nama-voices.json` を正解データとして、ReaScript内のYIN系検出を評価するツールです。ReaScript本体には含まれず、配布物の依存も増えません。
+
+```powershell
+python -m pip install numpy
+python tools\pitch_benchmark.py ^
+  --json-dir "D:\vst開発\jinriki\vowel-boundaries-fcpe" ^
+  --rates 8000,12000 ^
+  --lua "C:\path\to\lua.exe"
+```
+
+- 安定区間のセント誤差、オクターブ誤り、補正なし率を比較
+- グライド区間で「補正しないべきところを補正していないか」を確認
+- 8 kHz / 12 kHz、`--pad-ms` の窓拡張、`--channel loudest` などを切り替えて比較
+- 外部データ不要の自己テスト：`python tools\pitch_benchmark.py --self-test --lua lua`
+
+詳しい判定方法・実測例・制約は [docs/pitch-benchmark.md](./docs/pitch-benchmark.md) を参照してください。
+
 ## トラブルシューティング
 
 | 症状 | 対処 |
