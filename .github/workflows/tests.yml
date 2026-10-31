@@ -25,3 +25,6 @@ jobs:
 
       - name: Run REAPER API mock tests
         run: lua5.4 tests/test_reaper_logic.lua
+
+      - name: Validate ReaPack index
+        run: python3 tests/check_index.py

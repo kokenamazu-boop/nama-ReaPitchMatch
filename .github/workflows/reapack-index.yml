@@ -19,29 +19,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          ruby-version: "3.2"
+          node-version: "20"
 
-      - name: Install ReaPack indexer
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc
-          gem install reapack-index
-
-      - name: Validate package metadata
-        run: reapack-index --check
-
-      - name: Build index
-        run: reapack-index --rebuild --no-commit --name "nama-ReaPitchMatch" .
+      - name: Build index.xml
+        run: node tools/build-index.mjs
 
       - name: Commit updated index
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ -n "$(git status --porcelain index.xml)" ]; then
-            git add index.xml
-            git commit -m "Update ReaPack index"
-            git push
+          if git diff --quiet -- index.xml; then
+            echo "index.xml is up to date"
+            exit 0
           fi
+          git add index.xml
+          git commit -m "Update ReaPack index"
+          git push

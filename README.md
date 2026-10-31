@@ -29,7 +29,7 @@ REAPERで、**ファイル名に書かれた音名**を読み取り、選択し�
 3. `nama-ReaPitchMatch` の `Jinriki_FilenamePitch_to_Target_Soloist.lua` をインストールします。
 4. `Extensions → ReaPack → Browse packages` からスクリプトを実行するか、アクションリストに登録して実行します。
 
-`index.xml` はGitHub Actionsが自動生成します。初回のpush直後は生成まで少し待ってください。
+`index.xml` は `tools/build-index.mjs` がLuaのメタデータと現在のコミットから生成し、GitHub Actionsが更新します。手元で更新する場合は `node tools/build-index.mjs` を実行してください。
 
 ### 手動で入れる場合
 
@@ -161,9 +161,10 @@ REAPERに依存しない関数（音名パース、ファイル名抽出、ピ�
 ```sh
 lua tests/test_core.lua
 lua tests/test_reaper_logic.lua
+python3 tests/check_index.py
 ```
 
-合計34件のテストがあります。GitHub Actionsでも、push時に構文チェックとテストを実行します。
+Luaのテストは合計34件です。`check_index.py` は `index.xml` のバージョン・作者・説明・ダウンロードURLがLuaのメタデータと一致するか確認します。GitHub Actionsでも、push時に構文チェックとテストを実行します。
 
 ## トラブルシューティング
 
