@@ -27,7 +27,8 @@ jobs:
       - name: Install ReaPack indexer
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc
+          sudo apt-get install -y pandoc build-essential cmake pkg-config \
+            libssl-dev libssh2-1-dev zlib1g-dev libgit2-dev
           gem install reapack-index
 
       - name: Validate package metadata
