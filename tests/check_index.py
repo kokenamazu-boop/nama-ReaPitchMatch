@@ -46,6 +46,7 @@ assert source is not None, "source要素がありません"
 assert source.get("main") == "main", "sourceのmain属性がありません"
 url = source.text or ""
 assert url.startswith("https://github.com/kokenamazu-boop/nama-ReaPitchMatch/raw/"), url
+assert f"/raw/{index.get('commit')}/" in url, "source URLとcommitが一致しません"
 assert url.endswith("/" + script_name), url
 
 print(f"OK: index.xml {script_name} {version} ({index.get('commit')[:7]})")
